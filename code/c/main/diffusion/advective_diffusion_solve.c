@@ -253,7 +253,7 @@ int main(int argc, char ** argv)
   {
     cmc_error_message_position_in_code(__FILE__, __LINE__);
     fprintf(stderr, "cannot scan problem data from file %s\n", data_name);
-    fclose(data_file);
+    
     goto m_inner_free;
   }
   fclose(data_file_2);
@@ -286,6 +286,8 @@ int main(int argc, char ** argv)
 //   free(dual_potential);
 // flow_rate_free:
 //   free(flow_rate);
+fclose(data_file);
+
 data_free:
   diffusion_transient_discrete_mixed_weak_free(data);
   diffusion_transient_discrete_primal_weak_free(data_2);
