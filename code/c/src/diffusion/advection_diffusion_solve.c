@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include "double_array.h"
 
 #include "cmc_error_message.h"
 #include "cmc_diffusion_discrete_primal_weak_a_advective.h"
@@ -157,7 +158,8 @@ double * advection_diffusion_solve(
   /* initialization */
   memcpy(flow_rate, input->data->initial_flow_rate, sizeof(double) * m_cn_dm1);
   memcpy(dual_potential, input->data->initial_dual_potential, sizeof(double) * m_cn_d);
-
+ /* the initial $n$ elements of $potential$ are the initial condition */
+  memcpy(concentration, input_diffusion->data->initial, sizeof(double) * m_cn_0);
   // fprintf(stdout,"mixed : ");
   // diffusion_transient_discrete_mixed_weak_file_print_raw(stdout,input->data);
   // fprintf(stdout,"primal : ");
@@ -185,20 +187,6 @@ double * advection_diffusion_solve(
     fputs("cannot copy rhs_base\n", stderr);
     goto error;
   }
-
-  /*
-    IMPORTANT:
-    Here I assume zero initial concentration because your main does not pass
-    an initial concentration array explicitly.
-
-    If your data_diffusion structure contains an initial potential field,
-    for example data_diffusion->initial_potential or data_diffusion->u_0,
-    replace this zero initialisation by:
-
-      memcpy(concentration, data_diffusion->u_0, sizeof(double) * m_cn_0);
-
-    The exact field name depends on your local struct definition.
-  */
 
   /*
     Step 3:
@@ -241,9 +229,9 @@ double * advection_diffusion_solve(
       dual_potential + m_cn_d * i,
       input);
 
-    // fprintf(stdout,"flow_rate %d : ",i);
-    // double_array_file_print(stdout,m_cn_dm1,flow_rate + m_cn_dm1 * i,"--raw");
-    // fprintf(stdout,"\n");
+     fprintf(stdout,"flow_rate %d : ",i);
+     double_array_file_print(stdout,m_cn_dm1,flow_rate + m_cn_dm1 * i,"--raw");
+     fprintf(stdout,"\n");
 
     // fprintf(stdout,"flow_rate_reduced %d : ",i);
     // double_array_file_print(stdout,m_cn_dm1_bar,flow_rate_reduced,"--raw");
@@ -278,7 +266,7 @@ double * advection_diffusion_solve(
     rhs_advective = matrix_sparse_copy(a_advective);
     matrix_sparse_scalar_multiply(
       a_advective,
-      time_step / 2.);
+      time_step * 0.5);
 
     if (lhs_advective == NULL)
     {
@@ -289,7 +277,7 @@ double * advection_diffusion_solve(
 
     matrix_sparse_scalar_multiply(
       rhs_advective,
-      -time_step / 2.);
+      -time_step * 0.5);
 
     if (rhs_advective == NULL)
     {
@@ -301,11 +289,6 @@ double * advection_diffusion_solve(
     /*
       lhs_new = lhs_base + lhs_advective
       rhs_new = rhs_base + rhs_advective
-
-      注意：你原文里写的是 matrix_spaese_linear_combination，
-      这里很可能是拼写错误。一般应该是 matrix_sparse_linear_combination。
-      如果你本地库里确实叫 matrix_spaese_linear_combination，
-      就把下面两个函数名改回你本地真实函数名。
     */
     lhs_new = matrix_sparse_linear_combination(
       lhs_advective,
@@ -320,10 +303,14 @@ double * advection_diffusion_solve(
       goto error;
     }
 
+     /* update Dirichlet rows of lhs_new by Dirichlet boundary conditions */
+        /* apply Dirichlet boundary condition on matrix $lhs$ */
+      matrix_sparse_set_identity_rows(lhs_new, input_diffusion->data->boundary_dirichlet);
+
     rhs_new = matrix_sparse_linear_combination(
       rhs_advective,
       rhs_base,
-      -1.,
+      1.,
       1.);
 
     if (rhs_new == NULL)
@@ -381,10 +368,7 @@ double * advection_diffusion_solve(
   matrix_sparse_free(lhs_base);
   matrix_sparse_free(rhs_base);
 
-  /*
-    如果你的库里有对应的 free 函数，使用它。
-    函数名可能略有不同，需要按你本地 header 改。
-  */
+ 
   diffusion_transient_discrete_mixed_weak_trapezoidal_loop_data_free(
     input);
   diffusion_transient_discrete_primal_weak_trapezoidal_loop_data_free(

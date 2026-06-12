@@ -18,7 +18,7 @@ void cmc_diffusion_discrete_primal_weak_a_advective_allocate(
   struct matrix_sparse * a_advective;
 
   cmc_memory_allocate(
-    (void **) a_advective_pointer, status, sizeof(a_advective));
+    (void **) a_advective_pointer, status, sizeof(struct matrix_sparse));
   if (*status)
   {
     cmc_error_message_position_in_code(__FILE__, __LINE__);

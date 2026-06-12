@@ -40,7 +40,7 @@ static double kappa_1(const double * x)
 static double initial(const double * x)
 {
   if (x[0] == 0.)
-    return 100.;
+    return 20.;
   else
     return 0.;
 }
@@ -61,7 +61,7 @@ static int boundary_dirichlet(const double * x)
 static double g_dirichlet(const double * x)
 {
   if (x[0] == 0.)
-    return 100.;
+    return 20.;
   else
     return 0.;
 }
