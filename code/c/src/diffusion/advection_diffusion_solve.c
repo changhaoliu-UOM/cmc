@@ -51,7 +51,8 @@ double * advection_diffusion_solve(
   struct matrix_sparse * lhs_base = NULL;
   struct matrix_sparse * rhs_base = NULL;
 
-  struct matrix_sparse * a_advective = NULL;
+  struct matrix_sparse * a_advective_current = NULL;
+  struct matrix_sparse * a_advective_next = NULL;
   struct matrix_sparse * lhs_advective = NULL;
   struct matrix_sparse * rhs_advective = NULL;
   struct matrix_sparse * lhs_new = NULL;
@@ -124,7 +125,6 @@ double * advection_diffusion_solve(
     This gives flow_rate at all time levels.
   */
 
-
   /*
     Step 2:
     Initialise the primal weak diffusion trapezoidal data.
@@ -158,19 +158,15 @@ double * advection_diffusion_solve(
   /* initialization */
   memcpy(flow_rate, input->data->initial_flow_rate, sizeof(double) * m_cn_dm1);
   memcpy(dual_potential, input->data->initial_dual_potential, sizeof(double) * m_cn_d);
- /* the initial $n$ elements of $potential$ are the initial condition */
+  /* the initial n elements of potential are the initial condition */
   memcpy(concentration, input_diffusion->data->initial, sizeof(double) * m_cn_0);
-  // fprintf(stdout,"mixed : ");
-  // diffusion_transient_discrete_mixed_weak_file_print_raw(stdout,input->data);
-  // fprintf(stdout,"primal : ");
-  // diffusion_transient_discrete_primal_weak_file_print_raw(stdout,input_diffusion->data);
 
   /*
     Save pure diffusion matrices.
     Every time step we will use:
 
-      lhs = lhs_base + dt/2  * A_advective
-      rhs = rhs_base - dt/2  * A_advective
+      lhs = lhs_base + dt/2  * A_advective_next
+      rhs = rhs_base - dt/2  * A_advective_current
   */
   lhs_base = matrix_sparse_copy(input_diffusion->lhs);
   if (lhs_base == NULL)
@@ -192,7 +188,6 @@ double * advection_diffusion_solve(
     Step 3:
     Time loop for advection-diffusion.
   */
- 
   m_cn_dm1_bar = m_cn_dm1 - data_flow->boundary_neumann_dm1->a0;
 
   y = (double *) malloc(sizeof(double) * m_cn_d);
@@ -202,6 +197,7 @@ double * advection_diffusion_solve(
     cmc_error_message_malloc(sizeof(double) * m_cn_d, "y");
     goto error;
   }
+
   flow_rate_reduced = (double *) malloc(sizeof(double) * m_cn_dm1_bar);
   if (flow_rate_reduced == NULL)
   {
@@ -213,7 +209,8 @@ double * advection_diffusion_solve(
 
   for (i = 0; i < number_of_steps; ++i)
   {
-    a_advective = NULL;
+    a_advective_current = NULL;
+    a_advective_next = NULL;
     lhs_advective = NULL;
     rhs_advective = NULL;
     lhs_new = NULL;
@@ -229,19 +226,42 @@ double * advection_diffusion_solve(
       dual_potential + m_cn_d * i,
       input);
 
-     fprintf(stdout,"flow_rate %d : ",i);
-     double_array_file_print(stdout,m_cn_dm1,flow_rate + m_cn_dm1 * i,"--raw");
-     fprintf(stdout,"\n");
+    fprintf(stdout, "flow_rate old %d : ", i);
+    double_array_file_print(stdout, m_cn_dm1,
+      flow_rate + m_cn_dm1 * i, "--raw");
+    fprintf(stdout, "\n");
 
-    // fprintf(stdout,"flow_rate_reduced %d : ",i);
-    // double_array_file_print(stdout,m_cn_dm1_bar,flow_rate_reduced,"--raw");
-    // fprintf(stdout,"\n");
+    fprintf(stdout, "flow_rate new %d : ", i + 1);
+    double_array_file_print(stdout, m_cn_dm1,
+      flow_rate + m_cn_dm1 * (i + 1), "--raw");
+    fprintf(stdout, "\n");
 
     /*
-      Construct A_advective using flow_rate at time level i + 1.
+      Construct two advection matrices for the trapezoidal rule.
+
+      A_advective_current uses flow_rate at time level i.
+      It acts on concentration at time level i on the RHS.
+
+      A_advective_next uses flow_rate at time level i + 1.
+      It acts on concentration at time level i + 1 on the LHS.
     */
     cmc_diffusion_discrete_primal_weak_a_advective(
-      &a_advective,
+      &a_advective_current,
+      &status_local,
+      m,
+      m_cbd_dm1,
+      data_diffusion->pi_0,
+      flow_rate + m_cn_dm1 * i);
+
+    if (status_local)
+    {
+      cmc_error_message_position_in_code(__FILE__, __LINE__);
+      cmc_error_message_cannot_calculate("a_advective_current");
+      goto error;
+    }
+
+    cmc_diffusion_discrete_primal_weak_a_advective(
+      &a_advective_next,
       &status_local,
       m,
       m_cbd_dm1,
@@ -251,40 +271,37 @@ double * advection_diffusion_solve(
     if (status_local)
     {
       cmc_error_message_position_in_code(__FILE__, __LINE__);
-      cmc_error_message_cannot_calculate("a_advective");
+      cmc_error_message_cannot_calculate("a_advective_next");
       goto error;
     }
 
-    // fprintf(stdout,"a_advective %d : \n",i);
-    // matrix_sparse_file_print(stdout,a_advective,"--raw");
-
     /*
-      lhs_advective =  dt/2 * A_advective
-      rhs_advective = -dt/2 * A_advective
+      lhs_advective =  dt/2 * A_advective_next
+      rhs_advective = -dt/2 * A_advective_current
     */
-    lhs_advective = a_advective;
-    rhs_advective = matrix_sparse_copy(a_advective);
-    matrix_sparse_scalar_multiply(
-      a_advective,
-      time_step * 0.5);
-
+    lhs_advective = matrix_sparse_copy(a_advective_next);
     if (lhs_advective == NULL)
     {
       cmc_error_message_position_in_code(__FILE__, __LINE__);
-      fputs("cannot calculate lhs_advective\n", stderr);
+      fputs("cannot copy lhs_advective\n", stderr);
       goto error;
     }
+
+    rhs_advective = matrix_sparse_copy(a_advective_current);
+    if (rhs_advective == NULL)
+    {
+      cmc_error_message_position_in_code(__FILE__, __LINE__);
+      fputs("cannot copy rhs_advective\n", stderr);
+      goto error;
+    }
+
+    matrix_sparse_scalar_multiply(
+      lhs_advective,
+      time_step * 0.5);
 
     matrix_sparse_scalar_multiply(
       rhs_advective,
       -time_step * 0.5);
-
-    if (rhs_advective == NULL)
-    {
-      cmc_error_message_position_in_code(__FILE__, __LINE__);
-      fputs("cannot calculate rhs_advective\n", stderr);
-      goto error;
-    }
 
     /*
       lhs_new = lhs_base + lhs_advective
@@ -303,9 +320,14 @@ double * advection_diffusion_solve(
       goto error;
     }
 
-     /* update Dirichlet rows of lhs_new by Dirichlet boundary conditions */
-        /* apply Dirichlet boundary condition on matrix $lhs$ */
-      matrix_sparse_set_identity_rows(lhs_new, input_diffusion->data->boundary_dirichlet);
+    /*
+      Apply Dirichlet boundary condition on lhs.
+      The RHS Dirichlet values are assembled inside
+      diffusion_transient_discrete_primal_weak_solve_trapezoidal_next().
+    */
+    matrix_sparse_set_identity_rows(
+      lhs_new,
+      input_diffusion->data->boundary_dirichlet);
 
     rhs_new = matrix_sparse_linear_combination(
       rhs_advective,
@@ -336,6 +358,7 @@ double * advection_diffusion_solve(
     /*
       Solve concentration at time level i + 1.
     */
+    errno = 0;
     diffusion_transient_discrete_primal_weak_solve_trapezoidal_next(
       concentration + m_cn_0 * (i + 1),
       rhs_final,
@@ -349,11 +372,13 @@ double * advection_diffusion_solve(
       goto error;
     }
 
-    // matrix_sparse_free(a_advective);
+    matrix_sparse_free(a_advective_current);
+    matrix_sparse_free(a_advective_next);
     matrix_sparse_free(lhs_advective);
     matrix_sparse_free(rhs_advective);
 
-    a_advective = NULL;
+    a_advective_current = NULL;
+    a_advective_next = NULL;
     lhs_advective = NULL;
     rhs_advective = NULL;
   }
@@ -368,9 +393,7 @@ double * advection_diffusion_solve(
   matrix_sparse_free(lhs_base);
   matrix_sparse_free(rhs_base);
 
- 
-  diffusion_transient_discrete_mixed_weak_trapezoidal_loop_data_free(
-    input);
+  diffusion_transient_discrete_mixed_weak_trapezoidal_loop_data_free(input);
   diffusion_transient_discrete_primal_weak_trapezoidal_loop_data_free(
     input_diffusion);
 
@@ -384,7 +407,8 @@ y_free:
   free(y);
 
 error:
-  matrix_sparse_free(a_advective);
+  matrix_sparse_free(a_advective_current);
+  matrix_sparse_free(a_advective_next);
   matrix_sparse_free(lhs_advective);
   matrix_sparse_free(rhs_advective);
   matrix_sparse_free(lhs_new);
@@ -401,8 +425,7 @@ error:
 input_free:
   if (input != NULL)
   {
-    diffusion_transient_discrete_mixed_weak_trapezoidal_loop_data_free(
-      input);
+    diffusion_transient_discrete_mixed_weak_trapezoidal_loop_data_free(input);
   }
 
   if (input_diffusion != NULL)
